@@ -1,9 +1,4 @@
 # IWR6843AOP Bootloader Protocol Analysis
-
-## Overview
-
-This document analyzes the UART communication protocol used by the IWR6843AOP flash tool to communicate with the Texas Instruments mmWave radar bootloader.
-
 ## UART Configuration
 
 - **Baud Rate**: 115200
