@@ -293,19 +293,3 @@ if calculated_checksum != checksum:
 # Send ACK
 comm.write(struct.pack("B", 0xCC))
 ```
-
-## Performance Considerations
-
-### Optimization Strategies
-1. **Skip Version Detection**: Hardcode PG3+ settings for IWR6843AOP
-2. **Fixed Parameters**: Use known device characteristics
-3. **Efficient Progress**: Limit progress updates to prevent spam
-4. **Chunk Size**: 240 bytes optimal for UART reliability
-
-### Timing Analysis
-- **Connection**: ~1-2 seconds
-- **Erase**: ~2-3 seconds  
-- **Flash Rate**: ~8KB/second (at 115200 baud with protocol overhead)
-- **Total Time**: Varies by file size (typical 1MB firmware takes ~2-3 minutes)
-
-This protocol analysis provides the foundation for implementing compatible bootloader tools or debugging communication issues with IWR6843AOP devices.
