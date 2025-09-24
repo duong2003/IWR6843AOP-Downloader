@@ -1,25 +1,25 @@
 #!/usr/bin/env python3
 """
-IWR6843AOP Flash Tool - Standalone Single File Version
-========================================================
-Consolidated TI mmWave infrastructure with all dependencies embedded
+IWR6843AOP Erase Tool - SFLASH Firmware Eraser
+===============================================
+Standalone tool to erase firmware from IWR6843AOP SFLASH memory
 
 FLOW OVERVIEW:
-1. Initialize hardware connection (COM9)  
-2. Set device parameters (IWR6843AOP, part number)
+1. Initialize hardware connection (COM9)
+2. Set device parameters (IWR6843AOP, part number)  
 3. Erase existing firmware from SFLASH
-4. Flash new META_IMAGE1 to SFLASH  
-5. Verify and disconnect
+4. Verify erase completed successfully
+5. Disconnect cleanly
 
 USAGE:
-- Simply run: python flash_iwr6843aop_standalone.py
+- Simply run: python erase.py
 - No command line arguments needed
-- Uses hardcoded COM9 and built-in demo firmware
-- Always performs erase + flash for reliability
+- Uses hardcoded COM9 connection
+- Only erases SFLASH firmware area
 
-Author: Using TI mmWave modules (consolidated)
+Author: Based on TI mmWave infrastructure
 Date: 2025-09-19
-Target: IWR6843AOP only, META_IMAGE1 format
+Target: IWR6843AOP only, SFLASH erase operation
 """
 
 # ============================================================================
@@ -36,16 +36,123 @@ import serial    # Serial communication with IWR6843AOP
 from serial import SerialException
 import binascii  # Binary/hex conversions for bootloader protocol
 import subprocess # Not used in simplified version, kept for compatibility
+import datetime  # For timestamp logging
+
+# ============================================================================
+# COMMUNICATION LOGGER - Raw data logging for debugging
+# ============================================================================
+
+class CommLogger:
+    """Communication logger for raw data debugging"""
+    
+    def __init__(self, log_file="log.txt"):
+        self.log_file = log_file
+        self.enabled = True
+        # Clear previous log file
+        try:
+            with open(self.log_file, 'w') as f:
+                f.write(f"=== IWR6843AOP Erase Tool Communication Log ===\n")
+                f.write(f"Started: {datetime.datetime.now()}\n")
+                f.write("=" * 60 + "\n\n")
+        except Exception as e:
+            print(f"Warning: Cannot create log file: {e}")
+            self.enabled = False
+    
+    def log_write(self, port, data, description=""):
+        """Log data being written to serial port"""
+        if not self.enabled:
+            return
+        
+        try:
+            timestamp = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
+            hex_data = ' '.join(f'0x{byte:02X}' for byte in data)
+            
+            # Console output
+            print(f"[TX {timestamp}] {description}")
+            print(f"    Port: {port} | Bytes: {len(data)} | Data: {hex_data}")
+            
+            # File output
+            with open(self.log_file, 'a') as f:
+                f.write(f"[TX {timestamp}] {description}\n")
+                f.write(f"    Port: {port} | Bytes: {len(data)}\n")
+                f.write(f"    Raw Data: {hex_data}\n")
+                f.write(f"    ASCII: {self._to_printable_ascii(data)}\n\n")
+        except Exception as e:
+            print(f"Log write error: {e}")
+    
+    def log_read(self, port, data, description=""):
+        """Log data being read from serial port"""
+        if not self.enabled:
+            return
+            
+        try:
+            timestamp = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
+            hex_data = ' '.join(f'0x{byte:02X}' for byte in data)
+            
+            # Console output
+            print(f"[RX {timestamp}] {description}")
+            print(f"    Port: {port} | Bytes: {len(data)} | Data: {hex_data}")
+            
+            # File output
+            with open(self.log_file, 'a') as f:
+                f.write(f"[RX {timestamp}] {description}\n")
+                f.write(f"    Port: {port} | Bytes: {len(data)}\n")
+                f.write(f"    Raw Data: {hex_data}\n")
+                f.write(f"    ASCII: {self._to_printable_ascii(data)}\n\n")
+        except Exception as e:
+            print(f"Log read error: {e}")
+    
+    def log_event(self, event, description=""):
+        """Log general events"""
+        if not self.enabled:
+            return
+            
+        try:
+            timestamp = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
+            
+            # Console output
+            print(f"[EVENT {timestamp}] {event}: {description}")
+            
+            # File output
+            with open(self.log_file, 'a') as f:
+                f.write(f"[EVENT {timestamp}] {event}: {description}\n\n")
+        except Exception as e:
+            print(f"Log event error: {e}")
+    
+    def _to_printable_ascii(self, data):
+        """Convert binary data to printable ASCII representation"""
+        result = ""
+        for byte in data:
+            if 32 <= byte <= 126:  # Printable ASCII range
+                result += chr(byte)
+            else:
+                result += f"\\x{byte:02X}"
+        return result
+    
+    def close(self):
+        """Close log file with summary"""
+        if not self.enabled:
+            return
+            
+        try:
+            with open(self.log_file, 'a') as f:
+                f.write("=" * 60 + "\n")
+                f.write(f"Log ended: {datetime.datetime.now()}\n")
+                f.write("=" * 60 + "\n")
+        except Exception as e:
+            print(f"Log close error: {e}")
+
+# Global logger instance
+comm_logger = CommLogger()
 
 # ============================================================================
 # EMBEDDED SERIAL STUB MODULE (from serialStub.py)
 # ============================================================================
 
-# Global variables for SerialStub
+# Global variables for SerialStub - Simplified for IWR6843AOP only
 GETVERSION_REQ = False
 GETVERSION_CALLED = False
 GETVERSION_CRC_NEXT = False
-PARTNUM = "WR16"
 
 # Serial stub constants
 AR_BOOTLDR_OPCODE_ACK               = struct.pack("B", 0xCC)
@@ -88,6 +195,11 @@ class SerialStub:
     def write(self, value):
         global GETVERSION_REQ
         global GETVERSION_CALLED
+        global comm_logger
+        
+        # Log the write operation
+        comm_logger.log_write(self.comm_port, value, "SerialStub Write")
+        
         if (GETVERSION_CALLED is True and (value == AR_BOOTLDR_OPCODE_GET_VERSION_INFO)):
             GETVERSION_REQ = True
         print("xxx List of bytes written to comm_port %s" % (self.comm_port))
@@ -99,15 +211,14 @@ class SerialStub:
     def read(self, value):
         global GETVERSION_REQ
         global GETVERSION_CRC_NEXT
-        global PARTNUM
+        global comm_logger
+        
         if (value != 0):
             if (GETVERSION_REQ is True):
                 if (value == 1):
                     if (GETVERSION_CRC_NEXT is True):
-                        if (PARTNUM[1:5] in ("WR14","WR12")):
-                            bytesRead = struct.pack("B",8)
-                        else:
-                            bytesRead = struct.pack("B",16)
+                        # IWR6843AOP always uses 16-byte version response
+                        bytesRead = struct.pack("B",16)
                         GETVERSION_CRC_NEXT = False
                     else:
                         bytesRead = AR_BOOTLDR_OPCODE_ACK
@@ -115,10 +226,8 @@ class SerialStub:
                     bytesRead = struct.pack(">H",14)
                     GETVERSION_CRC_NEXT = True
                 if (value >= 12):
-                    if (PARTNUM[1:5] in ("WR14","WR12")):
-                        bytesRead = binascii.a2b_hex("010006010000000000000000")
-                    else:
-                        bytesRead = binascii.a2b_hex("080006020000000000000000")
+                    # IWR6843AOP version format: 08 00 06 02 00 00 00 00 00 00 00 00
+                    bytesRead = binascii.a2b_hex("080006020000000000000000")
                     GETVERSION_REQ = False
             else:
                 bytesRead = AR_BOOTLDR_OPCODE_ACK
@@ -128,6 +237,10 @@ class SerialStub:
                     bytesRead = bytesRead + struct.pack("B",ord(AR_BOOTLDR_OPCODE_ACK))
                 if (value >= 4):
                     bytesRead = bytesRead + struct.pack("B",ord(AR_BOOTLDR_OPCODE_RET_SUCCESS))
+            
+            # Log the read operation
+            comm_logger.log_read(self.comm_port, bytesRead, f"SerialStub Read ({value} bytes requested)")
+            
             b = bytearray(bytesRead)
             print("xxx Bytes read from comm_port %s" % (self.comm_port))
             for i in b:
@@ -162,37 +275,23 @@ DEFAULT_CHUNK_SIZE                  = 240
 MAX_FILE_SIZE                       = 1024*1024
 MAX_APP_FILE_SIZE                   = 166912
 FILE_HEADERSIZE                     = 4
-AWR_CANCEL_MSG = "Cancel request detected...Ceasing flashing operation."
+AWR_CANCEL_MSG = "Cancel request detected...Ceasing erase operation."
 
 # File types mapping - IWR6843AOP only needs META_IMAGE1
 Files = {
 "META_IMAGE1"              : struct.pack(">I",4)
 }
 
-# Part numbers - IWR6843AOP only
+# IWR6843AOP constants
 IWR68xx_PART_NUM  = "IWR68"
-xWR68xx_PART_NUM  = "WR68"
-
-PartNumSupported = [IWR68xx_PART_NUM]
-OlderFileFormatParts = []
-CONFIGFileParts = []
 
 # File header versions
 AWR_PRE_PG3_KEY = "PrePG3"
 AWR_POST_PG3_KEY = "PostPG3"
 
-FileHeaders = {
-AWR_PRE_PG3_KEY :  {
-xWR68xx_PART_NUM : { "headers" : [0x5254534D],
-                     "fileType" : ["META_IMAGE1"]  # Only META_IMAGE1 for IWR6843AOP
-                   },                   
-                   },
-AWR_POST_PG3_KEY : {
-xWR68xx_PART_NUM : { "headers" : [0x5254534D],
-                     "fileType" : ["META_IMAGE1"]  # Only META_IMAGE1 for IWR6843AOP
-                   },                   
-                   }
-}
+# IWR6843AOP file headers - simplified for single device
+IWR6843AOP_HEADERS = [0x5254534D]
+IWR6843AOP_FILE_TYPE = ["META_IMAGE1"]
 
 # Version information
 AWR_VERSION_PG1_14_12 = "07000600"
@@ -255,10 +354,9 @@ IGNORE_BYTE_CONDITION = True
 IS_FILE_ALLOCATED     = False
 CHIP_VARIANT          = "CC"
 
-# Keys from Uniflash UI
+# Keys from Uniflash UI (simplified for IWR6843AOP)
 COMPORT_KEY     = 'COMPort'
 MEMSELECT_KEY   = 'MemSelectRadio'
-PARTNUM_KEY     = 'partnum'
 DOWNLOADFORMAT_KEY = 'DownloadFormat'
 
 class FilesObject(object):
@@ -296,7 +394,6 @@ class BootLdr:
         self.imageProgCntList = {}
         self.PG3OrLater = False
         self.progMessage =""
-        self.partNum = ""
         self.cancelRequested = False
         self.stubOut = STUBOUT_VALUE
         self._trace_msg(TRACE_LEVEL_DEBUG, "===>" + self.__class__.__name__ + " init complete")
@@ -334,37 +431,49 @@ class BootLdr:
         return status
 
     def _comm_open(self):
+        global comm_logger
         self._trace_msg(TRACE_LEVEL_DEBUG,"--> Entering _comm_open method")
+        comm_logger.log_event("CONN_OPEN", f"Opening COM port {self.com_port}")
+        
         if(self._is_connected()):
             self._trace_msg(TRACE_LEVEL_DEBUG,"<-- Exiting _comm_open method")
             return True
         if (self.stubOut is False):
             try:
                 self.comm = serial.Serial(port=self.com_port, baudrate=self.baudrate, timeout=10)
+                comm_logger.log_event("REAL_SERIAL", f"Real serial port opened: {self.com_port} @ {self.baudrate} baud")
             except SerialException:
                 self._trace_msg(TRACE_LEVEL_ERROR, "Serial port %s"%(self.com_port) + " specified does not exist, is already open, or permission is denied!!")
                 self._trace_msg(TRACE_LEVEL_ERROR, "!! Aborting operation!!")
+                comm_logger.log_event("CONN_ERROR", f"Failed to open {self.com_port}")
                 self._trace_msg(TRACE_LEVEL_DEBUG,"<-- Exiting _comm_open method")
                 return False
         else:
             self.comm = SerialStub(port=self.com_port, baudrate=self.baudrate, timeout=6)
+            comm_logger.log_event("STUB_SERIAL", f"Serial stub created for {self.com_port}")
         if self.comm.isOpen():
             self.comm.flushInput()
             self.connected = True
             self._trace_msg(TRACE_LEVEL_DEBUG,"COM port opened.")
+            comm_logger.log_event("CONN_SUCCESS", f"Connected to {self.com_port}")
             self._trace_msg(TRACE_LEVEL_DEBUG,"<-- Exiting _comm_open method")
             return True
         else:
             self._trace_msg(TRACE_LEVEL_ERROR,"!!! Error opening the COM port!!!")
+            comm_logger.log_event("CONN_ERROR", f"Failed to open COM port {self.com_port}")
             self._trace_msg(TRACE_LEVEL_DEBUG,"<-- Exiting _comm_open method")
             return False
 
     def _comm_close(self):
+        global comm_logger
         self._trace_msg(TRACE_LEVEL_DEBUG,"--> Entering _comm_close method")
+        comm_logger.log_event("CONN_CLOSE", f"Closing COM port {self.com_port}")
+        
         if(self._is_connected()):
             self.comm.close()
             self.connected = False
             self._trace_msg(TRACE_LEVEL_DEBUG, "COM port closed.")
+            comm_logger.log_event("CONN_CLOSED", f"COM port {self.com_port} closed successfully")
             self.comm = None
         self._trace_msg(TRACE_LEVEL_DEBUG,"<-- Exiting _comm_close method")
 
@@ -372,13 +481,22 @@ class BootLdr:
         return self.connected
 
     def _send_packet(self,data):
+        global comm_logger
         self._trace_msg(TRACE_LEVEL_DEBUG, "-----> Send packet")
+        
         checksum = 0
         for b in data:
             checksum += b
         msgSize = len(data)+2
         sMsgSize = struct.pack(">H",msgSize)
         sChecksum = struct.pack("B",checksum & 0xff)
+        
+        # Log individual packet components
+        comm_logger.log_write(self.com_port, AWR_BOOTLDR_SYNC_PATTERN, "SYNC_PATTERN")
+        comm_logger.log_write(self.com_port, sMsgSize, f"MSG_SIZE ({msgSize})")
+        comm_logger.log_write(self.com_port, sChecksum, f"CHECKSUM (0x{checksum & 0xff:02X})")
+        comm_logger.log_write(self.com_port, data, "PAYLOAD_DATA")
+        
         self.comm.write(AWR_BOOTLDR_SYNC_PATTERN)
         self.comm.write(sMsgSize)
         self.comm.write(sChecksum)
@@ -386,17 +504,28 @@ class BootLdr:
         self._trace_msg(TRACE_LEVEL_DEBUG, "<----- Send packet")
 
     def _receive_packet(self, Length):
+        global comm_logger
         self._trace_msg(TRACE_LEVEL_DEBUG, "----->Receive packet")
+        
         Header = self.comm.read(3)
+        comm_logger.log_read(self.com_port, Header, f"PACKET_HEADER (expecting {Length} bytes payload)")
+        
         PacketLength , CheckSum  = struct.unpack(">HB", Header)
         PacketLength -= 2
         if (Length != PacketLength):
             self._trace_msg(TRACE_LEVEL_DEBUG, "Requested length={:d}, actual={:d}".format(Length, PacketLength))
             self._trace_msg(TRACE_LEVEL_FATAL, "Error, Mismatch between requested and actual packet length: act {:d}, req {:d}".format(PacketLength, Length))
+        
         Payload = self.comm.read(PacketLength)
+        comm_logger.log_read(self.com_port, Payload, f"PACKET_PAYLOAD ({PacketLength} bytes)")
+        
         if (len(Payload) != Length):
             self._trace_msg(TRACE_LEVEL_FATAL, "Error, time-out while receiving packet's payload")
-        self.comm.write(AWR_BOOTLDR_OPCODE_ACK)
+        
+        ack_data = AWR_BOOTLDR_OPCODE_ACK
+        comm_logger.log_write(self.com_port, ack_data, "ACK_RESPONSE")
+        self.comm.write(ack_data)
+        
         CalculatedCheckSum=0
         for byte in Payload:
             CalculatedCheckSum += byte
@@ -410,25 +539,40 @@ class BootLdr:
         return Payload
 
     def _read_ack(self):
+        global comm_logger
         self._trace_msg(TRACE_LEVEL_DEBUG, "-----> Waiting for ACK message from device.")
+        
         length = ''
         while (length == ''):
             length = self.comm.read(2)
+        comm_logger.log_read(self.com_port, length, "ACK_LENGTH")
+        
         chksum = self.comm.read(1)
-        self.comm.read(1)
+        comm_logger.log_read(self.com_port, chksum, "ACK_CHECKSUM")
+        
+        reserved = self.comm.read(1)
+        comm_logger.log_read(self.com_port, reserved, "ACK_RESERVED")
+        
         a = self.comm.read(1)
+        comm_logger.log_read(self.com_port, a, "ACK_OPCODE")
+        
         status = False
         while (not ((a == AWR_BOOTLDR_OPCODE_ACK) or (a == AWR_BOOTLDR_OPCODE_NACK))):
             a = self.comm.read(1)
+            comm_logger.log_read(self.com_port, a, "ACK_RETRY_READ")
+            
         self._trace_msg(TRACE_LEVEL_DEBUG,"Checking message from device:")
         if (a == AWR_BOOTLDR_OPCODE_ACK):
             self._trace_msg(TRACE_LEVEL_DEBUG,"*** Received ACK ***")
+            comm_logger.log_event("ACK_RECEIVED", "Device acknowledged command")
             status = True
         elif (a == AWR_BOOTLDR_OPCODE_NACK):
             self._trace_msg(TRACE_LEVEL_DEBUG,"*** Received NACK ***")
+            comm_logger.log_event("NACK_RECEIVED", "Device rejected command")
             status = False
         else:
             self._trace_msg(TRACE_LEVEL_ERROR,"XXXX Received unexpected data!!!XXXX")
+            comm_logger.log_event("ACK_ERROR", f"Unexpected ACK data: {a.hex() if a else 'None'}")
             status = False
         self._trace_msg(TRACE_LEVEL_DEBUG, "<----- Done waiting for ACK message from device.")
         return status
@@ -451,7 +595,7 @@ class BootLdr:
             self._trace_msg(TRACE_LEVEL_INFO, AWR_CANCEL_MSG)
             status = False
         elif (length == ''):
-            self._trace_msg(TRACE_LEVEL_ERROR, "Initial response from the device was not received. Please power cycle device before re-flashing.")
+            self._trace_msg(TRACE_LEVEL_ERROR, "Initial response from the device was not received. Please power cycle device before re-erasing.")
             status = False
         else:
             chksum = self.comm.read(1)
@@ -483,46 +627,6 @@ class BootLdr:
         self._trace_msg(TRACE_LEVEL_DEBUG,"<--- Send command")
         return ackStatus
 
-    def _send_start_download(self,file_id,file_size,max_size,mirror_enabled,storage):
-        self._trace_msg(TRACE_LEVEL_DEBUG,"->Send start download command")
-        data = AWR_BOOTLDR_OPCODE_START_DOWNLOAD + \
-            struct.pack(">I",file_size) + Storages[storage] + \
-            Files[file_id] + struct.pack(">I",mirror_enabled)
-        self._send_command(data)
-        return True
-
-    def _send_file_close(self,file_id):
-        self._trace_msg(TRACE_LEVEL_DEBUG,"-->Send file close command")
-        data = AWR_BOOTLDR_OPCODE_FILE_CLOSE + \
-            Files[file_id]
-        self._send_command(data)
-        self._trace_msg(TRACE_LEVEL_DEBUG,"<-- Send file close command")
-        return True
-
-    def _send_chunk(self,buff,bufflen):
-        self._trace_msg(TRACE_LEVEL_DEBUG,"--> Send chunk")
-        data = AWR_BOOTLDR_OPCODE_SEND_DATA + buff
-        return self._send_command(data)
-
-    def _send_chunkRAM(self,buff,bufflen):
-        self._trace_msg(TRACE_LEVEL_DEBUG,"--> Send chunkRAM")
-        data = AWR_BOOTLDR_OPCODE_SEND_DATA_RAM + buff
-        return self._send_command(data)
-
-    def _getFileHeaderList(self):
-        if (self.PG3OrLater is True):
-            PGkey = AWR_POST_PG3_KEY
-        else:
-            PGkey = AWR_PRE_PG3_KEY
-        return FileHeaders[PGkey][self.partNum[1:5]]["headers"]
-
-    def _getFileTypeList(self):
-        if (self.PG3OrLater is True):
-            PGkey = AWR_POST_PG3_KEY
-        else:
-            PGkey = AWR_PRE_PG3_KEY
-        return FileHeaders[PGkey][self.partNum[1:5]]["fileType"]
-
     # ******************* APIs *******************
 
     def connect_with_reset(self, timeout, com_port, reset_command):
@@ -543,7 +647,7 @@ class BootLdr:
             if (reset_command != ""):
                 subprocess.call(reset_command)
             if (self._read_ack_with_cancel_check()):
-                self._trace_msg(TRACE_LEVEL_ACTIVITY,"Connection to COM port succeeded. Flashing can proceed.")
+                self._trace_msg(TRACE_LEVEL_ACTIVITY,"Connection to COM port succeeded. Erase can proceed.")
                 self._update_prog_msg("Connected to COM port.", 1)
                 if (sys.version_info[0] >= 2):
                     self.comm.break_condition = False
@@ -577,12 +681,18 @@ class BootLdr:
 
     def GetVersion(self):
         global GETVERSION_CALLED
+        global comm_logger
         self._trace_msg(TRACE_LEVEL_DEBUG,"-> Entering GetVersion method")
         self._trace_msg(TRACE_LEVEL_ACTIVITY,"Reading device version info...")
+        
+        comm_logger.log_event("GET_VERSION", "Requesting device version information")
+        
         if (self._comm_open()):
             GETVERSION_CALLED = True
             self._trace_msg(TRACE_LEVEL_DEBUG, "Connected to device to get version")
             data = AWR_BOOTLDR_OPCODE_GET_VERSION_INFO
+            
+            comm_logger.log_write(self.com_port, data, "GET_VERSION_COMMAND")
             self._send_packet(data)
             self._trace_msg(TRACE_LEVEL_DEBUG, "GET_VERSION code send packet completed.")
             Status = self._read_ack()
@@ -591,12 +701,21 @@ class BootLdr:
             try:
                 if (Status is False):
                     self._trace_msg(TRACE_LEVEL_DEBUG, "!!! Version read was not successful !!!")
+                    comm_logger.log_event("VERSION_ERROR", "Version read failed - no ACK")
                     return RetValue
-                Length = struct.unpack(">H", self.comm.read(2))[0]
+                    
+                length_data = self.comm.read(2)
+                comm_logger.log_read(self.com_port, length_data, "VERSION_LENGTH")
+                Length = struct.unpack(">H", length_data)[0]
+                
                 crcRead = self.comm.read(1)
+                comm_logger.log_read(self.com_port, crcRead, "VERSION_CRC")
                 checkSum = struct.unpack("B",crcRead)[0]
                 Length -= 2
+                
                 versionRead = self.comm.read(Length)
+                comm_logger.log_read(self.com_port, versionRead, f"VERSION_DATA ({Length} bytes)")
+                
                 calculatedCheckSum=0
                 for byte in versionRead:
                     calculatedCheckSum += byte
@@ -604,182 +723,87 @@ class BootLdr:
                 if (calculatedCheckSum != checkSum):
                     self._trace_msg(TRACE_LEVEL_ERROR, "Version checksum Calculated: 0x{:x}.  Received: 0x{:x}".format(calculatedCheckSum, checkSum))
                     self._trace_msg(TRACE_LEVEL_FATAL, "Checksum error on received packet")
+                    comm_logger.log_event("VERSION_ERROR", f"Checksum mismatch - Calc: 0x{calculatedCheckSum:02X}, Recv: 0x{checkSum:02X}")
                     return RetValue
                 else:
                     self._trace_msg(TRACE_LEVEL_DEBUG, "Version Calculated and Received CheckSum: 0x{:x}.".format(calculatedCheckSum))
+                    
                 versionData = binascii.b2a_hex(versionRead)
-                self.comm.write(AWR_BOOTLDR_OPCODE_ACK)
+                ack_response = AWR_BOOTLDR_OPCODE_ACK
+                comm_logger.log_write(self.com_port, ack_response, "VERSION_ACK_RESPONSE")
+                self.comm.write(ack_response)
+                
                 convertVersion = versionData[0:8]
                 self._trace_msg(TRACE_LEVEL_DEBUG, str("Truncated Version Info = %s"%(convertVersion)))
+                comm_logger.log_event("VERSION_SUCCESS", f"Device version: {convertVersion.decode()}")
                 GETVERSION_CALLED = False
                 RetValue = convertVersion
-            except:
+            except Exception as e:
+                comm_logger.log_event("VERSION_EXCEPTION", f"Exception during version read: {str(e)}")
                 pass
             finally:
                 self._comm_close()
                 self._trace_msg(TRACE_LEVEL_DEBUG, "Closing connection to device")
         else:
             self._trace_msg(TRACE_LEVEL_ERROR,"Cannot open serial port. Try again.")
+            comm_logger.log_event("VERSION_ERROR", "Cannot open serial port for version read")
         self._trace_msg(TRACE_LEVEL_DEBUG,"<- Exit GetVersion method")
         return RetValue
 
-    def download_file(self,filename,file_id,mirror_enabled,max_size,storage, imageProgList):
-        self._trace_msg(TRACE_LEVEL_DEBUG, "->Entering download_file method")
-        fSize = os.path.getsize(filename)
-        result = True
-        if (storage == "SRAM"):
-            self.cmdStatusSize = 4
-        else:
-            self.cmdStatusSize = 1
-        self._trace_msg(TRACE_LEVEL_ACTIVITY,"Downloading [%s] size [%d]"%(file_id,fSize))
-        if (fSize>0) and (fSize < MAX_FILE_SIZE):
-            if (max_size < fSize):
-                max_size = fSize
-            try:
-                fSrc = open(filename,"rb")
-            except IOError:
-                self._trace_msg(TRACE_LEVEL_FATAL, "Unable to open the file. Please double-check the name and path")
-                return False
-            if (self._comm_open()):
-                self._update_prog_msg("Downloading [%s] size [%d]..."%(file_id,fSize),1)
-                if (self._send_start_download(file_id,fSize,max_size,mirror_enabled,storage)):
-                    offset = 0
-                    spacingCnt = 0
-                    spacingCntLimit = imageProgList[0]
-                    percentIncr = imageProgList[1]
-                    while (offset < fSize):
-                        buff = fSrc.read(self.chunksize)
-                        bufflen = len(buff)
-                        if (storage == "SRAM"):
-                            sendStatus = self._send_chunkRAM(buff,bufflen)
-                            if (sendStatus == False):
-                                result = False
-                                break
-                        else:
-                            sendStatus = self._send_chunk(buff,bufflen)
-                            if (sendStatus == False):
-                                result = False
-                                break
-                        spacingCnt += 1
-                        if (spacingCnt == spacingCntLimit):
-                            spacingCnt = 0
-                            self._update_prog_msg("", percentIncr)
-                        offset += bufflen
-                        c = self._checkForCancel()
-                        if (c is True):
-                            self._trace_msg(TRACE_LEVEL_INFO, AWR_CANCEL_MSG)
-                            result = False
-                            break
-                self._send_file_close(file_id);
-                self._comm_close()
-            else:
-                self._trace_msg(TRACE_LEVEL_ERROR,"Failure while trying to connect...")
-                result = False
-            fSrc.close()
-        else:
-            self._trace_msg(TRACE_LEVEL_ERROR,"Invalid file size")
-            result = False
-        self._trace_msg(TRACE_LEVEL_DEBUG,"<-Exit download_file method")
-        return result
-
     def erase_storage(self,storage="SFLASH",location_offset=0,capacity=0):
+        global comm_logger
         self._trace_msg(TRACE_LEVEL_DEBUG, "->Entering erase_storage method")
         self._trace_msg(TRACE_LEVEL_ACTIVITY, str("-->Erasing storage [%s]" %(storage)))
+        
+        comm_logger.log_event("ERASE_START", f"Erasing {storage} at offset {location_offset}, capacity {capacity}")
+        
         if (self._comm_open()):
             data = AWR_BOOTLDR_OPCODE_ERASE + Storages[storage] + \
                 struct.pack(">I",location_offset) + struct.pack(">I",capacity)
-            self._update_prog_msg("Sending Erase command to device...", 1)
+                
+            comm_logger.log_event("ERASE_CMD", f"Sending erase command - Storage: {storage}, Offset: {location_offset}, Capacity: {capacity}")
+            
+            self._update_prog_msg("Sending Erase command to device...", 10)
             self._trace_msg(TRACE_LEVEL_ACTIVITY,"-->Sending Erase command to device...")
             self._send_packet(data)
             self._trace_msg(TRACE_LEVEL_DEBUG,"Erase command sent to device.")
+            
             if (self._read_ack()):
                 self._trace_msg(TRACE_LEVEL_DEBUG,"Erase storage ACK received.")
                 self._trace_msg(TRACE_LEVEL_INFO,"-->Erase storage completed successfully!")
+                self._update_prog_msg("Erase completed successfully!", 80)
+                comm_logger.log_event("ERASE_SUCCESS", f"Storage {storage} erased successfully")
+                result = True
             else:
                 self._trace_msg(TRACE_LEVEL_DEBUG,"Erase storage ACK not received.")
                 self._trace_msg(TRACE_LEVEL_ERROR,"Erase storage did not complete. Reset device and try again")
-        self._update_prog_msg("", 1)
+                comm_logger.log_event("ERASE_FAILED", f"Storage {storage} erase failed - no ACK received")
+                result = False
+        else:
+            comm_logger.log_event("ERASE_FAILED", f"Cannot open communication port for erase operation")
+            result = False
+        self._update_prog_msg("", 5)
         self._comm_close()
         self._trace_msg(TRACE_LEVEL_DEBUG,"<-Exiting erase_storage method")
+        return result
 
-    def checkFileHeader(self, fileName, fileInfo):
-        self._trace_msg(TRACE_LEVEL_DEBUG, "->Entering checkFileHeader method")
-        self._trace_msg(TRACE_LEVEL_INFO, "Checking file %s for correct header for %s."%(fileName,self.partNum))
-        fileExists = os.path.isfile(fileName)
-        checkResult = True
-        if (fileExists == True):
-            fSize = os.path.getsize(fileName)
-            if (fSize < FILE_HEADERSIZE):
-                self._trace_msg(TRACE_LEVEL_ERROR, "File %s is too small: size = %d"%(fileName,fSize) + "!")
-                checkResult = False
-            else:
-                try:
-                    fSrc = open(fileName,"rb")
-                except IOError:
-                    self._trace_msg(TRACE_LEVEL_FATAL, "Unable to open the file. Please double-check the name and path")
-                    checkResult=False
-                if (checkResult == True):
-                    self._update_prog_msg("Checking fileType appropriateness for this device...", 2)
-                    rawHeader = fSrc.read(FILE_HEADERSIZE)
-                    if (sys.byteorder == 'little'):
-                        header = struct.unpack("<L",rawHeader)[0]
-                    else:
-                        header = struct.unpack(">L",rawHeader)[0]
-                    maskedHeader = header & 0xFFF00000
-                    fileHeaderList = self._getFileHeaderList()
-                    fileTypeList = self._getFileTypeList()
-                    if (header in fileHeaderList):
-                        if ((self.partNum[1:5]==xWR68xx_PART_NUM) or (self.isDevicePG3OrLater())):
-                            if (fileInfo.order <= 0 or fileInfo.order > 4):
-                                checkResult = False
-                                self._trace_msg(TRACE_LEVEL_ERROR, "Internal Error: File Order number value %d is not in valid range (1-4)"%(fileInfo.order))
-                                self._trace_msg(TRACE_LEVEL_DEBUG,"<-Exit checkFileHeader method prematurely!!")
-                                fSrc.close()
-                                return checkResult
-                            fileTypeIndex = fileInfo.order-1
-                        else:
-                            fileTypeIndex = fileHeaderList.index(header)
-                        self._trace_msg(TRACE_LEVEL_INFO, "%s device, fileType=%s detected -> OK" %(self.partNum,fileTypeList[fileTypeIndex]))
-                        fileInfo.file_id = fileTypeList[fileTypeIndex]
-                        fileInfo.fileSize = fSize
-                        checkResult = True
-                        self._update_prog_msg("", 1)
-                    else:
-                        self._trace_msg(TRACE_LEVEL_WARNING, "Header of %s file indicates it is not a valid file to flash to %s: "%(fileName,self.partNum) + hex(header))
-                        checkResult = False
-                    fSrc.close()
-        else:
-            self._trace_msg(TRACE_LEVEL_ERROR, "File %s does not exist!"%(fileName))
-            checkResult = False
-        self._trace_msg(TRACE_LEVEL_DEBUG,"<-Exit checkFileHeader method")
-        return checkResult
-
-    def calcProgressValues(self, images, fileSizeSum, formatOnDownload):
-        self._trace_msg(TRACE_LEVEL_DEBUG, "->Entering calcProgressValues method")
-        indicatorRange = UNIFLASH_PROG_INDICATOR_RANGE
-        if (formatOnDownload == True):
-            indicatorRange = UNIFLASH_PROG_INDICATOR_RANGE - ERASE_PROG_VALUE
-        for i in images:
-            range = (i.fileSize*indicatorRange)/fileSizeSum
-            numChunksToSend = i.fileSize/DEFAULT_CHUNK_SIZE
-            if (numChunksToSend < 1):
-                numChunksToSend = 1
-            if (range < 1):
-                range = 1
-            if (numChunksToSend > range):
-                spacingCnt =  int(numChunksToSend/range)
-                percentIncr = 1
-            else:
-                spacingCnt = 1
-                percentIncr = int(range/numChunksToSend)
-            self.imageProgCntList[i] = [spacingCnt, percentIncr]
-        self._trace_msg(TRACE_LEVEL_DEBUG,"<-Exit calcProgressValues method")
-
-    def getImageProgCntList(self, image):
-        return self.imageProgCntList[image]
-
-    def isPartNumSupported(self, partNum):
-        return partNum[0:5] in PartNumSupported
+    def determinePGVersion(self):
+        """
+        OPTIMIZED FOR IWR6843AOP: Skip version detection, hardcode PG3OrLater=True
+        
+        Device version 04000106 is always PG3+, no need to query device.
+        This saves ~2 seconds per operation and simplifies the flow.
+        """
+        global comm_logger
+        self._trace_msg(TRACE_LEVEL_DEBUG, "->Entering determinePGVersion method (OPTIMIZED)")
+        
+        # Hardcode for IWR6843AOP - device version 04000106 is always PG3+
+        self.PG3OrLater = True
+        
+        comm_logger.log_event("VERSION_SKIP", "Skipped version detection - hardcoded PG3OrLater=True for device 04000106")
+        self._trace_msg(TRACE_LEVEL_DEBUG, "PG3OrLater set to True (hardcoded for IWR6843AOP)")
+        self._trace_msg(TRACE_LEVEL_DEBUG,"<-Exit determinePGVersion method (OPTIMIZED)")
+        return True
 
     def get_prog_percentage(self):
         return self.progPercentage
@@ -787,92 +811,38 @@ class BootLdr:
     def update_prog_percentage(self, percentage):
         self.progPercentage = percentage
 
-    def checkPropertiesMapKeys(self, propMap):
-        keysPresent = True
-        if (COMPORT_KEY not in propMap):
-            value = COMPORT_KEY
-            keysPresent = False
-        elif (MEMSELECT_KEY not in propMap):
-            value = MEMSELECT_KEY
-            keysPresent = False
-        elif (PARTNUM_KEY not in propMap):
-            value = PARTNUM_KEY
-            keysPresent = False
-        elif (DOWNLOADFORMAT_KEY not in propMap):
-            value = DOWNLOADFORMAT_KEY
-            keysPresent = False
-
-        if (keysPresent is False):
-            self._trace_msg(TRACE_LEVEL_FATAL, "Integration Error: \'%s\' key is not present in propertiesMap"%(value))
-        return (keysPresent)
-
-    def determinePGVersion(self):
-        global PARTNUM
-        self._trace_msg(TRACE_LEVEL_DEBUG, "->Entering determinePGVersion method")
-        PARTNUM=self.partNum
-        versionRead = self.GetVersion()
-        if (versionRead == ""):
-            self._trace_msg(TRACE_LEVEL_DEBUG,"<-Exit determinePGVersion method, failure")
-            return False
-        if (versionRead in BootloaderVerPrePG3):
-            self.PG3OrLater = False
-        else:
-            self.PG3OrLater = True
-        self._trace_msg(TRACE_LEVEL_DEBUG,"<-Exit determinePGVersion method")
-        return True
-
-    def isDevicePG3OrLater(self):
-        return self.PG3OrLater
-
-    def copyImagesList(self, images):
-        filesList = []
-        for i in images:
-            fileObj = FilesObject(i.path, i.order)
-            filesList.append(fileObj)
-        return filesList
-
-    def addAutomaticDownload(self, filesList, path):
-        # No automatic CONFIG file download needed for IWR6843AOP
-        return
-
-    def setPartNum(self, partNum):
-        self.partNum = partNum
-
 # ============================================================================
-# IWR6843AOP FLASHER CLASS (Updated to use embedded modules)
+# IWR6843AOP ERASER CLASS
 # ============================================================================
 
-class IWR6843AOPFlasher:
+class IWR6843AOPEraser:
     """
-    IWR6843AOP Flasher using embedded TI mmWave infrastructure
+    IWR6843AOP Eraser using embedded TI mmWave infrastructure
     
     MAIN FLOW:
-    1. __init__() - Initialize with hardcoded settings (COM9, firmware path)
-    2. flash_firmware() - Main entry point for flashing process
+    1. __init__() - Initialize with hardcoded settings (COM9)  
+    2. erase_firmware() - Main entry point for erase process
     3. _simple_connect() - Connect to device and setup parameters
-    4. _simple_flash() - Erase + Flash META_IMAGE1 to SFLASH
+    4. _simple_erase() - Erase firmware from SFLASH
     5. disconnect() - Clean disconnect from device
     
     OPTIMIZATIONS:
     - Only supports IWR6843AOP (removes multi-device complexity)
-    - Always flashes META_IMAGE1 to SFLASH (removes storage options)
-    - Always erase before flash (ensures reliability)
+    - Always erases SFLASH (removes storage options)
     - Hardcoded settings (removes config file dependencies)
     """
     
     def __init__(self):
-        """Initialize flasher with hardcoded settings - no config files needed"""
+        """Initialize eraser with hardcoded settings - no config files needed"""
         # STEP 1: Set hardcoded parameters
-        self.com_port = "COM9"  # Fixed COM port for IWR6843AOP
-        self.default_firmware = "user_files/images/vital_signs_tracking_6843AOP_demo.bin"  # Default firmware path
-        self.part_number = "IWR68"  # Part number for IWR6843 series (used by TI bootloader)
+        self.com_port = "COM16"  # Fixed COM port for IWR6843AOP
         
         # STEP 2: Display configuration
         print(f"COM Port: {self.com_port}")
-        print(f"Default firmware: {self.default_firmware}")
+        print(f"Target: IWR6843AOP SFLASH erase")
         
         # STEP 3: Create callback handler for progress/error reporting  
-        self.callback = FlashCallback()
+        self.callback = EraseCallback()
         
         # STEP 4: Create TI bootloader instance with our settings
         self.bootloader = BootLdr(self.callback, self.com_port)
@@ -886,11 +856,7 @@ class IWR6843AOPFlasher:
             if success:
                 print("Connected to device")
                 
-                # Set part number for IWR6843AOP
-                self.bootloader.setPartNum(self.part_number)
-                print(f"Part number set: {self.part_number}")
-                
-                # Determine PG version
+                # Determine PG version for IWR6843AOP
                 if self.bootloader.determinePGVersion():
                     print("Device PG version determined")
                     return True
@@ -913,54 +879,35 @@ class IWR6843AOPFlasher:
         except Exception as e:
             print(f"Disconnect warning: {e}")
     
-    def quick_flash(self, firmware_path=None):
-        """Ultra-fast META_IMAGE1 flash - always erase + flash for optimal performance"""
-        return self.flash_firmware(firmware_path, format_enabled=True)
-    
-    def flash_firmware(self, firmware_path=None, format_enabled=True):
+    def erase_firmware(self):
         """
-        MAIN FLASH FLOW - Entry point for firmware flashing process
+        MAIN ERASE FLOW - Entry point for firmware erase process
         
         FLOW:
-        1. Validate firmware file exists
-        2. Connect to IWR6843AOP device  
-        3. Erase existing firmware (always enabled for reliability)
-        4. Flash new META_IMAGE1 firmware
-        5. Disconnect cleanly
+        1. Connect to IWR6843AOP device  
+        2. Erase SFLASH firmware area
+        3. Verify erase completed successfully
+        4. Disconnect cleanly
         
-        Args:
-            firmware_path: Path to .bin file (uses default if None)
-            format_enabled: Always True in optimized version
-            
         Returns:
-            bool: True if flash successful, False otherwise
+            bool: True if erase successful, False otherwise
         """
         
-        print("IWR6843AOP Flash Tool (META_IMAGE1 Only)")
-        print("=" * 45)
+        print("IWR6843AOP Erase Tool (SFLASH Only)")
+        print("=" * 38)
         
-        # STEP 1: Validate firmware file
-        # Use default firmware if not specified
-        if firmware_path is None:
-            firmware_path = self.default_firmware
-            
-        # Check firmware file exists
-        if not os.path.exists(firmware_path):
-            print(f"ERROR: Firmware file not found: {firmware_path}")
-            return False
-            
         try:
-            # STEP 2: Connect to device and setup parameters
+            # STEP 1: Connect to device and setup parameters
             if not self._simple_connect():
                 return False
             
-            # STEP 3: Erase + Flash (always erase for best results)
-            if not self._simple_flash(firmware_path, True):  # Always format for reliability
+            # STEP 2: Erase SFLASH
+            if not self._simple_erase():
                 return False
             
-            # STEP 4: Success - inform user
-            print("META_IMAGE1 Flash Completed!")
-            print("Reset device to run new firmware")
+            # STEP 3: Success - inform user
+            print("SFLASH Erase Completed!")
+            print("Device firmware has been erased")
             return True
             
         except KeyboardInterrupt:
@@ -970,18 +917,19 @@ class IWR6843AOPFlasher:
             print(f"Error: {e}")
             return False
         finally:
-            # STEP 5: Always disconnect cleanly
+            # STEP 4: Always disconnect cleanly
             self.disconnect()
     
     def _simple_connect(self):
         """
-        DEVICE CONNECTION FLOW
+        DEVICE CONNECTION FLOW (OPTIMIZED)
         
         STEPS:
-        1. Open serial connection to COM9
-        2. Set IWR6843AOP part number for bootloader
-        3. Determine device PG (Product Generation) version
-        4. Validate connection is ready for flashing
+        1. Open serial connection to COM16
+        2. Skip version detection (hardcode PG3OrLater=True for device 04000106)
+        3. Validate connection is ready for erasing
+        
+        OPTIMIZATION: Saves ~2 seconds by skipping GetVersion() call
         
         Returns:
             bool: True if connection successful and ready
@@ -993,10 +941,7 @@ class IWR6843AOPFlasher:
             print("Connection failed")
             return False
         
-        # STEP 2: Configure device parameters
-        self.bootloader.setPartNum(self.part_number)
-        
-        # STEP 3: Determine device version (needed for proper protocol)
+        # STEP 2: Skip device version detection for IWR6843AOP (device version 04000106 is always PG3+)  
         if not self.bootloader.determinePGVersion():
             print("Cannot determine device version")
             return False
@@ -1005,75 +950,47 @@ class IWR6843AOPFlasher:
         print("Connected successfully")
         return True
     
-    def _simple_flash(self, firmware_path, format_enabled):
+    def _simple_erase(self):
         """
-        ERASE + FLASH FLOW - Core flashing operation
+        ERASE FLOW - Core erase operation
         
         OPTIMIZED FLOW:
-        1. Prepare file info (always META_IMAGE1 for IWR6843AOP)
-        2. Erase existing firmware from SFLASH (ensures clean slate)
-        3. Flash new firmware in chunks with progress tracking
-        4. Verify flash completed successfully
+        1. Display erase target (SFLASH firmware area)
+        2. Execute erase command with progress tracking
+        3. Verify erase completed successfully
+        4. Report results to user
         
-        Why erase first?
-        - Prevents corruption from partial overwrites
-        - Ensures consistent flash state
-        - Required by TI bootloader protocol
+        Why erase SFLASH?
+        - Removes all firmware from device
+        - Prepares device for fresh firmware installation
+        - Required for device recovery scenarios
         
-        Args:
-            firmware_path: Path to .bin firmware file
-            format_enabled: Always True in optimized version
-            
         Returns:
-            bool: True if flash successful
+            bool: True if erase successful
         """
-        # STEP 1: Prepare file information
-        print(f"File: {os.path.basename(firmware_path)}")
+        # STEP 1: Display erase information
+        print("Target: SFLASH (Serial Flash Memory)")
+        print("Operation: Full firmware area erase")
         
-        # Create file info object - always META_IMAGE1 for IWR6843AOP
-        file_info = FilesObject(firmware_path, 1)
-        file_size = os.path.getsize(firmware_path)
-        file_info.file_id = "META_IMAGE1"  # Only META_IMAGE1 for IWR6843AOP
-        file_info.fileSize = file_size
+        # STEP 2: Execute erase operation
+        print("Erasing SFLASH firmware area...")
         
-        print(f"Size: {file_size} bytes")
-        print(f"Target: META_IMAGE1 (SFLASH)")
+        # STEP 3: Call TI bootloader erase function
+        # Parameters: storage="SFLASH", location_offset=0, capacity=0 (full erase)
+        success = self.bootloader.erase_storage("SFLASH", 0, 0)
         
-        # STEP 2: Erase existing firmware (critical for reliability)
-        if format_enabled:
-            print("Erasing firmware area...")
-            # Erase specific firmware area only (faster than full erase)
-            self.bootloader.erase_storage("SFLASH", 0, 0)
-            print("Erase completed")
-        
-        # STEP 3: Flash new firmware 
-        print("Flashing META_IMAGE1...")
-        
-        # Calculate progress reporting (10 updates max to avoid spam)
-        total_chunks = file_size // 240 + 1  # 240 bytes per chunk
-        progress_step = max(1, total_chunks // 10)  # 10 progress updates max
-        
-        # STEP 4: Execute flash operation
-        # Flash directly to SFLASH using TI bootloader protocol
-        success = self.bootloader.download_file(
-            firmware_path,
-            "META_IMAGE1",  # Always META_IMAGE1 for IWR6843AOP
-            0,  # mirror_enabled = 0 (no mirroring)
-            0,  # max_size = 0 (auto-detect)
-            "SFLASH",  # Always SFLASH for firmware
-            [progress_step, 8]  # Progress: every N chunks, increment 8%
-        )
-        
-        # STEP 5: Report result
+        # STEP 4: Report result
         if success:
-            print("META_IMAGE1 flashed successfully")
+            print("SFLASH erased successfully")
+            print("All firmware data has been removed")
             return True
         else:
-            print("Flash failed")
+            print("Erase failed")
+            print("Check device connection and try again")
             return False
 
-class FlashCallback:
-    """Simplified callback class for progress and messages"""
+class EraseCallback:
+    """Simplified callback class for progress and messages during erase"""
     
     def __init__(self):
         self.progress = 0
@@ -1081,7 +998,7 @@ class FlashCallback:
         
     def update_progress(self, message, percentage):
         """Simple progress updates - only show significant changes"""
-        if percentage != self.last_percentage and percentage % 10 == 0:  # Only show every 10%
+        if percentage != self.last_percentage and percentage % 20 == 0:  # Show every 20%
             print(f"[{percentage:3d}%] {message}")
             self.last_percentage = percentage
         self.progress = percentage
@@ -1101,40 +1018,55 @@ def main():
     MAIN PROGRAM ENTRY POINT
     
     SIMPLIFIED FLOW:
-    1. Initialize IWR6843AOPFlasher with hardcoded settings
-    2. Execute quick_flash() for one-step operation  
+    1. Initialize IWR6843AOPEraser with hardcoded settings
+    2. Execute erase_firmware() for complete erase operation  
     3. Report success/failure to user
-    4. Exit with appropriate code
+    4. Export detailed log to log.txt
+    5. Exit with appropriate code
     
     NO ARGUMENTS NEEDED:
-    - COM port: Fixed to COM9
-    - Firmware: Uses built-in demo firmware  
+    - COM port: Fixed to COM16
+    - Device version: Fixed to 04000106 (PG3+)
     - Storage: Always SFLASH
-    - Format: Always enabled for reliability
+    - Operation: Always full erase, skip version detection
     """
+    global comm_logger
     
-    print("IWR6843AOP Flash Tool - Standalone")
-    print("Using hardcoded settings: COM9, built-in demo firmware")
-    print("=" * 50)
+    print("IWR6843AOP Erase Tool - Standalone (OPTIMIZED)")
+    print("Using hardcoded settings: COM16, SFLASH erase, Skip version check")
+    print("=" * 65)
     
-    # STEP 1: Create flasher instance with hardcoded settings
-    flasher = IWR6843AOPFlasher()
+    comm_logger.log_event("TOOL_START", "IWR6843AOP Erase Tool started")
     
-    # STEP 2: Execute optimized flash sequence
-    print("Starting optimized flash: Erase -> Flash META_IMAGE1")
+    # STEP 1: Create eraser instance with hardcoded settings
+    eraser = IWR6843AOPEraser()
     
-    # Use built-in demo firmware with quick_flash (erase + flash)
-    success = flasher.quick_flash()
+    # STEP 2: Execute erase operation
+    print("Starting SFLASH erase operation...")
+    comm_logger.log_event("ERASE_OPERATION", "Starting SFLASH erase operation")
+    
+    success = eraser.erase_firmware()
     
     # STEP 3: Report results to user
     if success:
-        print("\nSUCCESS! META_IMAGE1 flashed to IWR6843AOP")
-        print("Reset device to run new firmware")
+        print("\nSUCCESS! SFLASH firmware erased from IWR6843AOP")
+        print("Device is now ready for fresh firmware installation")
+        print("Use flash_iwr6843aop_standalone.py to install new firmware")
+        comm_logger.log_event("TOOL_SUCCESS", "Erase operation completed successfully")
     else:
-        print("\nFAILED! Check:")
-        print("  - Device connected to COM9")
+        print("\nFAILED! Erase operation could not complete")
+        print("Check:")
+        print("  - Device connected to COM16")
         print("  - Device in bootloader mode")
-        print("  - Firmware file exists")
+        print("  - Device powered on")
+        comm_logger.log_event("TOOL_FAILED", "Erase operation failed")
+    
+    # STEP 4: Close logger and save log file
+    comm_logger.log_event("TOOL_END", "IWR6843AOP Erase Tool ending")
+    comm_logger.close()
+    
+    print(f"\nDetailed communication log saved to: {comm_logger.log_file}")
+    print("Check log.txt for raw frame data analysis")
     
     return 0 if success else 1
 
@@ -1149,7 +1081,7 @@ if __name__ == "__main__":
     4. Exit with proper status code
     """
     try:
-        # Execute main flash process
+        # Execute main erase process
         exit_code = main()
         input("\nPress Enter to exit...")
         sys.exit(exit_code)

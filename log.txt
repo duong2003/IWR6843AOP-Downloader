@@ -1,0 +1,87 @@
+=== IWR6843AOP Erase Tool Communication Log ===
+Started: 2025-09-24 14:03:48.781073
+============================================================
+
+[EVENT 14:03:48.782] TOOL_START: IWR6843AOP Erase Tool started
+
+[EVENT 14:03:48.783] ERASE_OPERATION: Starting SFLASH erase operation
+
+[EVENT 14:03:48.783] CONN_OPEN: Opening COM port COM16
+
+[EVENT 14:03:48.904] REAL_SERIAL: Real serial port opened: COM16 @ 115200 baud
+
+[EVENT 14:03:48.905] CONN_SUCCESS: Connected to COM16
+
+[EVENT 14:03:49.009] CONN_CLOSE: Closing COM port COM16
+
+[EVENT 14:03:49.010] CONN_CLOSED: COM port COM16 closed successfully
+
+[EVENT 14:03:49.011] VERSION_SKIP: Skipped version detection - hardcoded PG3OrLater=True for device 04000106
+
+[EVENT 14:03:49.012] ERASE_START: Erasing SFLASH at offset 0, capacity 0
+
+[EVENT 14:03:49.013] CONN_OPEN: Opening COM port COM16
+
+[EVENT 14:03:49.016] REAL_SERIAL: Real serial port opened: COM16 @ 115200 baud
+
+[EVENT 14:03:49.017] CONN_SUCCESS: Connected to COM16
+
+[EVENT 14:03:49.017] ERASE_CMD: Sending erase command - Storage: SFLASH, Offset: 0, Capacity: 0
+
+[TX 14:03:49.018] SYNC_PATTERN
+    Port: COM16 | Bytes: 1
+    Raw Data: 0xAA
+    ASCII: \xAA
+
+[TX 14:03:49.018] MSG_SIZE (15)
+    Port: COM16 | Bytes: 2
+    Raw Data: 0x00 0x0F
+    ASCII: \x00\x0F
+
+[TX 14:03:49.019] CHECKSUM (0x2A)
+    Port: COM16 | Bytes: 1
+    Raw Data: 0x2A
+    ASCII: *
+
+[TX 14:03:49.020] PAYLOAD_DATA
+    Port: COM16 | Bytes: 13
+    Raw Data: 0x28 0x00 0x00 0x00 0x02 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00
+    ASCII: (\x00\x00\x00\x02\x00\x00\x00\x00\x00\x00\x00\x00
+
+[RX 14:03:59.030] ACK_LENGTH
+    Port: COM16 | Bytes: 0
+    Raw Data: 
+    ASCII: 
+
+[RX 14:04:03.195] ACK_CHECKSUM
+    Port: COM16 | Bytes: 1
+    Raw Data: 0x00
+    ASCII: \x00
+
+[RX 14:04:03.196] ACK_RESERVED
+    Port: COM16 | Bytes: 1
+    Raw Data: 0x04
+    ASCII: \x04
+
+[RX 14:04:03.197] ACK_OPCODE
+    Port: COM16 | Bytes: 1
+    Raw Data: 0xCC
+    ASCII: \xCC
+
+[EVENT 14:04:03.198] ACK_RECEIVED: Device acknowledged command
+
+[EVENT 14:04:03.199] ERASE_SUCCESS: Storage SFLASH erased successfully
+
+[EVENT 14:04:03.200] CONN_CLOSE: Closing COM port COM16
+
+[EVENT 14:04:03.201] CONN_CLOSED: COM port COM16 closed successfully
+
+[EVENT 14:04:03.203] CONN_CLOSE: Closing COM port COM16
+
+[EVENT 14:04:03.204] TOOL_SUCCESS: Erase operation completed successfully
+
+[EVENT 14:04:03.205] TOOL_END: IWR6843AOP Erase Tool ending
+
+============================================================
+Log ended: 2025-09-24 14:04:03.206839
+============================================================
